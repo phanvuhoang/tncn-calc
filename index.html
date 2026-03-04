@@ -187,6 +187,10 @@
     .blk { background: var(--g50); border-radius: 9px; padding: 11px 13px; margin: 8px 0; }
     .blk-ttl { font-size: .7rem; text-transform: uppercase; letter-spacing: .5px; font-weight: 700; color: var(--g400); margin-bottom: 8px; }
 
+    /* insurance notes */
+    .bh-note { font-size: .72rem; color: var(--g400); margin: 1px 0 4px; line-height: 1.4; }
+    .bh-note.warn { color: var(--amber); }
+
     /* bracket rows */
     .brow { display: flex; justify-content: space-between; font-size: .8rem; padding: 3px 0; color: var(--g400); }
     .brow.on { color: var(--g700); font-weight: 500; }
@@ -264,10 +268,10 @@
       <div class="fl">
         <label>Vùng lương tối thiểu</label>
         <select id="rgn">
-          <option value="1">Vùng 1 — 4.960.000 ₫/tháng</option>
-          <option value="2">Vùng 2 — 4.410.000 ₫/tháng</option>
-          <option value="3">Vùng 3 — 3.860.000 ₫/tháng</option>
-          <option value="4">Vùng 4 — 3.450.000 ₫/tháng</option>
+          <option value="1">Vùng 1 — 5.310.000 ₫/tháng</option>
+          <option value="2">Vùng 2 — 4.730.000 ₫/tháng</option>
+          <option value="3">Vùng 3 — 4.140.000 ₫/tháng</option>
+          <option value="4">Vùng 4 — 3.700.000 ₫/tháng</option>
         </select>
       </div>
     </div>
@@ -313,7 +317,11 @@
 'use strict';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-const MIN_WAGE = { 1: 4960000, 2: 4410000, 3: 3860000, 4: 3450000 };
+// Lương tối thiểu vùng (Nghị định 293/2025/NĐ-CP, hiệu lực 01/01/2026)
+const MIN_WAGE = { 1: 5310000, 2: 4730000, 3: 4140000, 4: 3700000 };
+// Lương cơ sở (từ 01/07/2025) — dùng để tính trần BHXH/BHYT
+const BASE_SALARY   = 2340000;
+const BHXH_BHYT_CAP = 20 * BASE_SALARY; // 46,800,000 ₫/tháng
 
 const OLD = {
   name: 'Luật cũ (hiện hành)',
@@ -384,13 +392,37 @@ function parseNum(s) {
 }
 
 // ── BHXH/BHYT/BHTN ────────────────────────────────────────────────────────────
+// Rules (effective 01/01/2026, Nghị định 293/2025/NĐ-CP):
+//   Base  = max(gross, regionalMin)          — floored at regional minimum wage
+//   BHXH  = 8%   × min(base, 20 × lương cơ sở)     cap = 46,800,000 ₫
+//   BHYT  = 1.5% × min(base, 20 × lương cơ sở)     cap = 46,800,000 ₫
+//   BHTN  = 1%   × min(base, 20 × lương tối thiểu vùng)
 function calcBH(gross, region) {
-  const cap  = 20 * MIN_WAGE[region];
-  const base = Math.min(gross, cap);
-  const bhxh = base * .08;
-  const bhyt = base * .015;
-  const bhtn = base * .01;
-  return { bhxh, bhyt, bhtn, total: bhxh + bhyt + bhtn, cap, base, capped: base < gross };
+  const regionalMin   = MIN_WAGE[region];
+  const bhxhBhytCap   = BHXH_BHYT_CAP;          // 46,800,000
+  const bhtnCap       = 20 * regionalMin;        // varies by region
+
+  // Floor at regional minimum (employee cannot contribute on less than min wage)
+  const base          = Math.max(gross, regionalMin);
+  const adjustedToMin = gross < regionalMin;
+
+  // Effective base for each type after applying respective cap
+  const bhxhBase = Math.min(base, bhxhBhytCap);
+  const bhtnBase = Math.min(base, bhtnCap);
+
+  const bhxh = bhxhBase * .08;
+  const bhyt = bhxhBase * .015;
+  const bhtn = bhtnBase * .01;
+
+  return {
+    bhxh, bhyt, bhtn,
+    total: bhxh + bhyt + bhtn,
+    base, bhxhBase, bhtnBase,
+    bhxhBhytCap, bhtnCap, regionalMin,
+    adjustedToMin,
+    bhxhCapped: bhxhBase < base,
+    bhtnCapped: bhtnBase < base,
+  };
 }
 
 // ── Progressive tax ────────────────────────────────────────────────────────────
@@ -545,9 +577,15 @@ function renderCard(id, r, cfg, isNew) {
       </div>`;
   });
 
-  // cap note
-  const capNote = r.bh.capped
-    ? `<div style="font-size:.72rem;color:var(--g400);margin-top:5px">* Tính trên mức trần: ${vnd(r.bh.cap)}₫ (20 × lương tối thiểu vùng)</div>`
+  // insurance notes
+  const minNote = r.bh.adjustedToMin
+    ? `<div class="bh-note warn">⚠ Lương thấp hơn tối thiểu vùng (${vnd(r.bh.regionalMin)}₫) — đóng BH trên mức tối thiểu</div>`
+    : '';
+  const bhxhCapNote = r.bh.bhxhCapped
+    ? `<div class="bh-note">Trần BHXH/BHYT: 20 × lương cơ sở = ${vnd(r.bh.bhxhBhytCap)}₫ → tính trên ${vnd(r.bh.bhxhBase)}₫</div>`
+    : '';
+  const bhtnCapNote = r.bh.bhtnCapped
+    ? `<div class="bh-note">Trần BHTN: 20 × lương tối thiểu vùng = ${vnd(r.bh.bhtnCap)}₫ → tính trên ${vnd(r.bh.bhtnBase)}₫</div>`
     : '';
 
   // gross label
@@ -572,23 +610,29 @@ function renderCard(id, r, cfg, isNew) {
       <div class="blk">
         <div class="blk-ttl">Bảo hiểm bắt buộc (NLĐ đóng)</div>
         <div class="row">
-          <span class="lbl">BHXH &nbsp;8%</span>
+          <span class="lbl">Lương đóng BH</span>
+          <span class="val">${vnd(r.bh.base)}₫</span>
+        </div>
+        ${minNote}
+        <div class="row">
+          <span class="lbl">BHXH (8%, trần ${tri(r.bh.bhxhBhytCap)})</span>
           <span class="val neg">−${vnd(r.bh.bhxh)}₫</span>
         </div>
         <div class="row">
-          <span class="lbl">BHYT &nbsp;1,5%</span>
+          <span class="lbl">BHYT (1,5%, trần ${tri(r.bh.bhxhBhytCap)})</span>
           <span class="val neg">−${vnd(r.bh.bhyt)}₫</span>
         </div>
+        ${bhxhCapNote}
         <div class="row" style="border-bottom:none">
-          <span class="lbl">BHTN &nbsp;1%</span>
+          <span class="lbl">BHTN (1%, trần ${tri(r.bh.bhtnCap)})</span>
           <span class="val neg">−${vnd(r.bh.bhtn)}₫</span>
         </div>
+        ${bhtnCapNote}
         <hr class="dsh">
         <div class="row" style="border-bottom:none">
           <span class="lbl"><strong>Tổng bảo hiểm</strong></span>
           <span class="val neg"><strong>−${vnd(r.bh.total)}₫</strong></span>
         </div>
-        ${capNote}
       </div>
 
       <!-- Deduction block -->
@@ -631,6 +675,8 @@ function renderCard(id, r, cfg, isNew) {
 }
 
 function pct(r) { return (r * 100).toFixed(0) + '%'; }
+// Format as Xtr (e.g. 46,8tr) using de-DE locale for comma decimal separator
+function tri(n) { return (n / 1e6).toLocaleString('de-DE') + 'tr'; }
 
 // ── Enter key ──────────────────────────────────────────────────────────────────
 document.addEventListener('keydown', e => { if (e.key === 'Enter') calc(); });
